@@ -27,7 +27,7 @@ parser.add_argument('--class_path', type=str, default='data/coco.names', help='p
 parser.add_argument('--conf_thres', type=float, default=0.8, help='object confidence threshold')
 parser.add_argument('--nms_thres', type=float, default=0.4, help='iou thresshold for non-maximum suppression')
 parser.add_argument('--batch_size', type=int, default=1, help='size of the batches')
-parser.add_argument('--n_cpu', type=int, default=8, help='number of cpu threads to use during batch generation')
+parser.add_argument('--n_cpu', type=int, default=4, help='number of cpu threads to use during batch generation')
 parser.add_argument('--img_size', type=int, default=416, help='size of each image dimension')
 opt = parser.parse_args()
 print(opt)
@@ -35,6 +35,7 @@ print(opt)
 os.makedirs('output', exist_ok=True)
 
 cuda = torch.cuda.is_available()
+
 
 # Set up model
 model = Darknet(opt.config_path, img_size=opt.img_size)
@@ -45,19 +46,22 @@ if cuda:
 
 model.eval() # Set in evaluation mode
 
-dataloader = DataLoader(ImageFolder('data/samples', img_size=opt.img_size),
-                        batch_size=opt.batch_size, shuffle=False, num_workers=opt.n_cpu)
+dataloader = iter(WebCam(img_size=opt.img_size))
+
 
 classes = load_classes(opt.class_path) # Extracts class labels from file
 
 Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
 
-imgs = []           # Stores image paths
-img_detections = [] # Stores detections for each image index
+# Bounding-box colors
+cmap = plt.get_cmap('tab20b')
+colors = [cmap(i) for i in np.linspace(0, 1, 20)]
 
 print ('\nPerforming object detection:')
-prev_time = time.time()
-for batch_i, (img_paths, input_imgs) in enumerate(dataloader):
+batch_i = 0
+for batch_i, (img, input_imgs) in enumerate(dataloader):
+    batch_i += 1
+    prev_time = time.time()
     # Configure input
     input_imgs = Variable(input_imgs.type(Tensor))
 
@@ -66,28 +70,16 @@ for batch_i, (img_paths, input_imgs) in enumerate(dataloader):
         detections = model(input_imgs)
         detections = non_max_suppression(detections, 80, opt.conf_thres, opt.nms_thres)
 
+    detections = detections[0]
+
     # Log progress
     current_time = time.time()
     inference_time = datetime.timedelta(seconds=current_time - prev_time)
     prev_time = current_time
     print ('\t+ Batch %d, Inference Time: %s' % (batch_i, inference_time))
 
-    # Save image and detections
-    imgs.extend(img_paths)
-    img_detections.extend(detections)
 
-# Bounding-box colors
-cmap = plt.get_cmap('tab20b')
-colors = [cmap(i) for i in np.linspace(0, 1, 20)]
 
-print ('\nSaving images:')
-# Iterate through images and save plot of detections
-for img_i, (path, detections) in enumerate(zip(imgs, img_detections)):
-
-    print ("(%d) Image: '%s'" % (img_i, path))
-
-    # Create plot
-    img = np.array(Image.open(path))
     plt.figure()
     fig, ax = plt.subplots(1)
     ax.imshow(img)
@@ -129,5 +121,14 @@ for img_i, (path, detections) in enumerate(zip(imgs, img_detections)):
     plt.axis('off')
     plt.gca().xaxis.set_major_locator(NullLocator())
     plt.gca().yaxis.set_major_locator(NullLocator())
-    plt.savefig('output/%d.png' % (img_i), bbox_inches='tight', pad_inches=0.0)
+    
+    fig.canvas.draw()
+
+    # Now we can save it to a numpy array.
+    data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='')
+    data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+
+    cv2.imshow('frame', data)
+
+    
     plt.close()
